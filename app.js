@@ -72,6 +72,8 @@ function qtyf(n){return isFinite(n)?new Intl.NumberFormat('fr-FR',{maximumFracti
 function pct(n){return isFinite(n)?(n>=0?'+':'')+n.toFixed(2).replace('.',',')+' %':'';}
 function signed(n){return isFinite(n)?(n>=0?'+':'−')+fEUR.format(Math.abs(n)):'';}
 function cls(n){return !isFinite(n)||Math.abs(n)<0.005?'mut':n>0?'pos':'neg';}
+function qtime(t){const d=new Date(t),n=new Date();const hm=d.toLocaleTimeString('fr-FR',{hour:'2-digit',minute:'2-digit'});
+  return d.toDateString()===n.toDateString()?hm:d.toLocaleDateString('fr-FR',{weekday:'short',day:'2-digit',month:'2-digit'})+' '+hm;}
 function ago(t){if(!t)return 'jamais';const s=(Date.now()-t)/1000;if(s<60)return 'à l\'instant';if(s<3600)return 'il y a '+Math.floor(s/60)+' min';if(s<86400)return 'il y a '+Math.floor(s/3600)+' h';
   return new Date(t).toLocaleDateString('fr-FR',{day:'2-digit',month:'2-digit',year:'2-digit'});}
 function el(tag,attrs,...kids){const e=document.createElement(tag);if(attrs)for(const[k,v]of Object.entries(attrs)){
@@ -134,7 +136,7 @@ function render(){
   const tpEl=$('#totalPnl');tpEl.className='pnl amt '+(hp?cls(tp):'mut');
   tpEl.textContent=hp?('Plus/moins-value latente : '+signed(tp)+(tc>0?'  ('+pct(tp/tc*100)+')':'')):'Plus/moins-value : renseigne PRU et cours';
   const st=[];st.push('Crypto : '+ago(S.cryptoAt));st.push('Change : '+(S.fx.at?ago(S.fx.at):'—'));
-  st.push('Actions : '+(S.stocksAt?ago(S.stocksAt):'manuel'));
+  st.push('Actions : '+(busy?'actualisation…'+(S.stocksAt?' (cache '+qtime(S.stocksAt)+')':''):(S.stocksAt?ago(S.stocksAt):'manuel')));
   if(S.cloudAt)st.push(S.updatedAt>S.cloudAt?'En ligne : modifs à sauvegarder':'En ligne : à jour');$('#status').textContent=st.join(' · ');
   drawDonut(parts,total);
   const any=SECTIONS.some(s=>S[s.k].length);$('#empty').classList.toggle('hidden',any);
@@ -239,7 +241,7 @@ function lineRow(sec,l){
     a=(l.ticker||'?')+(l.name?' · '+l.name:'');const c=(l.cur||'EUR').toUpperCase();
     const bits=[qtyf(num(l.qty))+' × '+(isFinite(num(l.price))?money(num(l.price),c):'—'),'PRU '+money(num(l.pru),c)];
     if(isFinite(num(l.chg))&&l.priceSrc==='auto'&&!l.autoFail)bits.push('jour '+pct(num(l.chg)));
-    if(l.priceAt)bits.push((l.autoFail?'dernier ':'')+(l.priceSrc==='auto'?(l.via||'auto')+' ':'saisi ')+ago(l.priceAt));b=bits.join(' · ');
+    if(l.priceAt)bits.push((l.autoFail?'dernier ':'')+(l.priceSrc==='auto'?(l.via||'auto')+' '+(l.quoteAt?'· cours '+qtime(l.quoteAt):ago(l.priceAt)):'saisi '+ago(l.priceAt)));b=bits.join(' · ');
     const wantsAuto=l.src!=='manuel'&&(l.isin||l.apiSym);
     for(const r of S.recurring)if(r.lineId===l.id)tags.push(el('span',{class:'tag rec'+(r.active?'':' off'),text:'🔁 +'+eur(r.amount).replace(',00','')+'/mois'+(r.active?'':' (pause)')}));
     if(v.missing)tags.push(el('span',{class:'tag',text:'cours manquant'}));
@@ -349,7 +351,7 @@ async function tdOne(sym,lines,key,now){
   S.settings.tdSymAt=Object.assign({},S.settings.tdSymAt,{[sym]:now});
   try{const r=await getJSON('https://api.twelvedata.com/quote?apikey='+encodeURIComponent(key)+'&symbol='+encodeURIComponent(sym));
     const p=r&&!r.code&&num(r.close);if(!isFinite(p))return [];const out=[];
-    for(const l of lines)if(l.apiSym&&l.apiSym.trim()===sym){l.price=p;l.chg=isFinite(num(r.percent_change))?num(r.percent_change):null;l.priceAt=now;l.priceSrc='auto';l.via='Twelve Data';l.autoFail=false;out.push(l);}
+    for(const l of lines)if(l.apiSym&&l.apiSym.trim()===sym){l.price=p;l.chg=isFinite(num(r.percent_change))?num(r.percent_change):null;l.priceAt=now;l.quoteAt=(+r.last_quote_at||+r.timestamp||0)*1000;l.priceSrc='auto';l.via='Twelve Data';l.autoFail=false;out.push(l);}
     return out;}catch(e){return [];}
 }
 let tdTimer=null;
@@ -358,33 +360,56 @@ function tdSchedule(){if(tdTimer)return;tdTimer=setTimeout(async()=>{tdTimer=nul
   const lines=stockLines().filter(l=>l.src!=='manuel'&&l.apiSym);const syms=tdDue(lines,false);if(!syms.length)return;
   const r=await tdOne(syms[0],lines,key,Date.now());if(r&&r.length){S.stocksAt=Date.now();save();render();}
   if(syms.length>1||!r)tdSchedule();},TD_GAP+500);}
+const OV_CACHE='pfdashUg.ovcache',OV='https://api.onvista.de/api/v1/instruments/';
+function ovCache(){try{return JSON.parse(localStorage.getItem(OV_CACHE)||'{}')||{};}catch(e){return {};}}
+function ovKey(l){return [l.isin,(l.cur||'EUR').toUpperCase(),l.mkt||''].join('|');}
+function ovStore(k,v){const c=ovCache();if(v)c[k]=v;else delete c[k];try{localStorage.setItem(OV_CACHE,JSON.stringify(c));}catch(e){}}
+function ovOut(q,name){const t=Date.parse(q.datetimeLast||'');return {price:num(q.last),chg:num(q.performancePct),quoteAt:isFinite(t)?t:0,via:'onvista '+(name||(q.market&&q.market.name)||'')};}
 async function onvista(l){
-  const types=l.ovType?[l.ovType]:['FUND','STOCK','DERIVATIVE']; // DERIVATIVE: ETC (e.g. physical gold)let d=null;
-  for(const t of types){try{d=await getJSON('https://api.onvista.de/api/v1/instruments/'+t+'/ISIN:'+encodeURIComponent(l.isin)+'/snapshot');l.ovType=t;break;}catch(e){d=null;}}
+  const k=ovKey(l);const c=ovCache()[k];
+  if(c&&c.id&&c.not){ // fast path: ~1 KB quote of the cached notation, no ISIN lookup
+    try{const q=await getJSON(OV+c.t+'/'+encodeURIComponent(c.id)+'/quote?idNotation='+encodeURIComponent(c.not));
+      if(q&&isFinite(num(q.last))&&(!q.isoCurrency||q.isoCurrency===(l.cur||'EUR').toUpperCase())){l.ovType=c.t;return ovOut(q,c.name);}}catch(e){}
+    ovStore(k,null); // stale -> resolve again below
+  }
+  const types=l.ovType?[l.ovType]:['FUND','STOCK','DERIVATIVE']; // DERIVATIVE: ETC (e.g. physical gold)
+  let d=null;
+  for(const t of types){try{d=await getJSON(OV+t+'/ISIN:'+encodeURIComponent(l.isin)+'/snapshot');l.ovType=t;break;}catch(e){d=null;}}
+  if(!d&&l.ovType){for(const t of ['FUND','STOCK','DERIVATIVE'].filter(x=>x!==l.ovType)){try{d=await getJSON(OV+t+'/ISIN:'+encodeURIComponent(l.isin)+'/snapshot');l.ovType=t;break;}catch(e){d=null;}}}
   if(!d)return null;
   const list=(d.quoteList&&d.quoteList.list)||[];const cur=(l.cur||'EUR').toUpperCase();
   const pref=[l.mkt,'_PAR','_NMS','_NAS','_NYS','_GER','_AMS','_BRU','_MIL'].filter(Boolean);
   let q=null;for(const m of pref){q=list.find(x=>x.market&&x.market.codeMarket===m&&x.isoCurrency===cur);if(q)break;}
   if(!q)q=list.find(x=>x.isoCurrency===cur);
   if(!q||!isFinite(num(q.last)))return null;
-  return {price:num(q.last),chg:num(q.performancePct),via:'onvista '+((q.market&&q.market.name)||'')};
+  const id=q.entityValue||q.idInstrument||(d.instrument&&d.instrument.entityValue);
+  if(id&&q.market&&q.market.idNotation)ovStore(k,{t:l.ovType,id:String(id),not:String(q.market.idNotation),name:q.market.name||'',at:Date.now()});
+  return ovOut(q);
 }
+async function pool(items,n,fn){let i=0;await Promise.all(Array.from({length:Math.min(n,items.length)},async()=>{while(i<items.length){const it=items[i++];try{await fn(it);}catch(e){}}}));}
+let rTimer=null;function softRender(){if(rTimer)return;rTimer=setTimeout(()=>{rTimer=null;render();},120);}
 async function refreshStocks(manual){
   const lines=stockLines().filter(l=>l.src!=='manuel'&&(l.apiSym||l.isin));if(!lines.length)return null;
   const prov=S.settings.provider,key=(S.settings.apiKey||'').trim();const now=Date.now();const done=new Set();
-  const setP=(l,r)=>{l.price=r.price;l.chg=isFinite(r.chg)?r.chg:null;l.priceAt=now;l.priceSrc='auto';l.via=r.via;l.autoFail=false;done.add(l);};
-  // 1) Twelve Data (free plan 8 credits/min): ONE symbol per call, >=30 s apart, max 2 calls/min across all tabs, each symbol <= every 4.5 min
-  if(prov==='twelvedata'&&key){
+  const setP=(l,r)=>{l.price=r.price;l.chg=isFinite(r.chg)?r.chg:null;l.priceAt=Date.now();l.quoteAt=r.quoteAt||0;l.priceSrc='auto';l.via=r.via;l.autoFail=false;done.add(l);softRender();};
+  const ovRun=ls=>pool(ls.filter(l=>!done.has(l)&&l.isin),6,async l=>{const r=await onvista(l);if(r)setP(l,r);});
+  const useTd=prov==='twelvedata'&&key;
+  // onvista (keyless, CORS) by ISIN for every line Twelve Data does not handle — 6 requests in parallel, started right away
+  const ovFirst=ovRun(lines.filter(l=>!((useTd||prov==='alphavantage'&&key)&&l.apiSym)));
+  // 1) Twelve Data first for lines with a symbol (free plan: US stocks such as COP): ONE symbol per call, >=31 s apart,
+  //    max 2 calls/min across all tabs, each symbol <= every 4.5 min, <=700/day; runs in parallel with onvista
+  const tdPart=(async()=>{if(!useTd)return;
     const syms=tdDue(lines,manual);
-    if(syms.length){const r=await tdOne(syms[0],lines,key,now);if(r)for(const l of r)done.add(l);if(syms.length>1)tdSchedule();}
-    for(const l of lines)if(l.apiSym&&l.via==='Twelve Data'&&!l.autoFail&&!done.has(l))done.add(l); // keep last TD quote until its turn
-  }
+    if(syms.length){const r=await tdOne(syms[0],lines,key,now);if(r)for(const l of r){done.add(l);softRender();}if(syms.length>1)tdSchedule();}
+    for(const l of lines)if(l.apiSym&&l.via==='Twelve Data'&&!l.autoFail&&!done.has(l)&&now-(l.priceAt||0)<15*60e3)done.add(l); // keep a recent TD quote until its turn
+    await ovRun(lines.filter(l=>l.apiSym)); // onvista fallback for symbols TD could not price
+  })();
   // 2) Alpha Vantage (optional)
-  if(prov==='alphavantage'&&key){for(const l of lines){if(!l.apiSym||done.has(l))continue;
+  const avPart=(async()=>{if(!(prov==='alphavantage'&&key))return;for(const l of lines){if(!l.apiSym||done.has(l))continue;
     try{const d=await getJSON('https://www.alphavantage.co/query?function=GLOBAL_QUOTE&symbol='+encodeURIComponent(l.apiSym)+'&apikey='+encodeURIComponent(key));
-      const g=d['Global Quote'];const p=g&&num(g['05. price']);if(isFinite(p))setP(l,{price:p,chg:num(String(g['10. change percent']||'').replace('%','')),via:'Alpha Vantage'});}catch(e){}}}
-  // 3) onvista (keyless, CORS) by ISIN — covers Euronext Paris and fallback
-  for(const l of lines){if(done.has(l)||!l.isin)continue;try{const r=await onvista(l);if(r)setP(l,r);}catch(e){}}
+      const g=d['Global Quote'];const p=g&&num(g['05. price']);if(isFinite(p))setP(l,{price:p,chg:num(String(g['10. change percent']||'').replace('%','')),via:'Alpha Vantage'});}catch(e){}}
+    await ovRun(lines.filter(l=>l.apiSym));})();
+  await Promise.all([ovFirst,tdPart,avPart]);
   let ok=0,fail=0;for(const l of lines){if(done.has(l))ok++;else{l.autoFail=true;fail++;}}
   if(ok)S.stocksAt=now;return {ok,fail};
 }
@@ -392,9 +417,9 @@ let busy=false;
 async function refreshAll(manual){
   if(busy)return;busy=true;$('#btnRefresh').classList.add('spin');
   const msgs=[];
-  const fxOk=await refreshFx();if(!fxOk)msgs.push('change indisponible');
-  const cOk=await refreshCrypto(false);if(!cOk)msgs.push('crypto indisponible');
-  const st=await refreshStocks(manual);
+  render();
+  const [fxOk,cOk,st]=await Promise.all([refreshFx().then(r=>{softRender();return r;}),refreshCrypto(false).then(r=>{softRender();return r;}),refreshStocks(manual)]);
+  if(!fxOk)msgs.push('change indisponible');if(!cOk)msgs.push('crypto indisponible');
   if(st&&st.fail)msgs.push(st.fail+' cours action en manuel');
   save();render();busy=false;$('#btnRefresh').classList.remove('spin');
   if(manual)toast(msgs.length?'Actualisé — '+msgs.join(', '):'Cours actualisés');
