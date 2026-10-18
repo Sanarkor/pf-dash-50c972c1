@@ -208,3 +208,14 @@ dialog::backdrop{-webkit-backdrop-filter:blur(3px)}
 @supports (-webkit-touch-callout:none){input,select,textarea{font-size:16px!important}}
 html{-webkit-text-size-adjust:100%;text-size-adjust:100%}
 .legend{grid-template-columns:minmax(0,1fr)}.legend li{min-width:0}
+/* envelope groups */
+.egrp>.sec-head .sec-title{font-size:17px}
+.grp-body{display:grid;gap:10px}
+.sub-sec{background:#0f1622;border:1px solid #ffffff0d;border-left:3px solid var(--c);border-radius:12px;padding:12px}
+.sub-sec .sec-title{font-size:15px}
+.sub-sec .sec-title .bar{display:none}
+.sub-sec .sec-tot .v{font-size:16px}
+.sub-sec .sec-body{margin-top:10px}
+.env-row{grid-template-columns:10px minmax(0,1fr) auto auto auto}
+.env-row .env-grp{grid-column:2/-1;font-size:13px;padding:6px 10px}
+@media (max-width:520px){.sub-sec{padding:10px 9px}.grp-body{gap:8px}.sub-sec .sec-tot .v{font-size:17px}}
