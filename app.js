@@ -575,13 +575,14 @@ function renderEnvList(){const box=$('#envList');if(!box)return;box.textContent=
   const TYPES={sec:'Titres / fonds',sav:'Épargne',cry:'Crypto'};
   SECTIONS.forEach((s,i)=>{
     const name=el('input',{type:'text',value:s.name,maxlength:'60','aria-label':'Nom de l\'enveloppe',onchange:e=>{const v=e.target.value.trim();if(!v){e.target.value=s.name;return;}s.name=v;touch();save();render();}});
-    const up=el('button',{type:'button',class:'mini',title:'Monter',disabled:i===0,onclick:()=>{SECTIONS.splice(i-1,0,SECTIONS.splice(i,1)[0]);touch();save();render();renderEnvList();}},'↑');
+    const up=el('button',{type:'button',class:'mini',title:'Monter','aria-label':'Monter',disabled:i===0,onclick:()=>{SECTIONS.splice(i-1,0,SECTIONS.splice(i,1)[0]);touch();save();render();renderEnvList();}},'↑');
+    const down=el('button',{type:'button',class:'mini',title:'Descendre','aria-label':'Descendre',disabled:i===SECTIONS.length-1,onclick:()=>{SECTIONS.splice(i+1,0,SECTIONS.splice(i,1)[0]);touch();save();render();renderEnvList();}},'↓');
     const del=el('button',{type:'button',class:'mini danger',title:'Supprimer l\'enveloppe',onclick:async()=>{const n=(S[s.k]||[]).length;closeDlg();
       if(!await ask('Supprimer l\'enveloppe « '+s.name+' » ?',{ok:'Supprimer',danger:1,sub:n?n+' ligne(s) seront supprimées.':'Elle est vide.'}))return;
       SECTIONS.splice(SECTIONS.indexOf(s),1);delete S[s.k];delete S.cash[s.k];S.recurring=S.recurring.filter(r=>r.sec!==s.k);touch();save();render();renderEnvList();}},'✕');
     const grp=el('input',{type:'text',value:s.group||'',maxlength:'60',list:'grpList',placeholder:'Groupe (facultatif)','aria-label':'Groupe',class:'env-grp',
       onchange:e=>{const g=e.target.value.trim();if(g)s.group=g.slice(0,60);else delete s.group;touch();save();render();renderEnvList();}});
-    box.appendChild(el('div',{class:'env-row'},el('span',{class:'dot'}),name,el('span',{class:'env-type',text:TYPES[s.type]}),up,del,grp));
+    box.appendChild(el('div',{class:'env-row'},el('span',{class:'dot'}),name,el('span',{class:'env-type',text:TYPES[s.type]}),el('span',{class:'env-mv'},up,down),del,grp));
     box.lastChild.querySelector('.dot').style.background=s.color;});
 }
 function addEnv(){const n=$('#envNewName').value.trim();const t=$('#envNewType').value;if(!n){toast('Donne un nom à l\'enveloppe');return;}

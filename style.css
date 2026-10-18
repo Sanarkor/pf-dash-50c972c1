@@ -175,6 +175,7 @@ main{overflow-x:clip}
 /* custom envelopes (settings) */
 .env-list{display:grid;gap:6px}
 .env-row{display:grid;grid-template-columns:10px minmax(0,1fr) auto auto auto;gap:8px;align-items:center}
+.env-mv{display:flex;gap:4px}
 .env-row .dot{width:10px;height:10px;border-radius:50%}
 .env-row input{background:#0b111b;border:1px solid var(--line);border-radius:10px;padding:8px 10px;color:var(--txt);width:100%;min-width:0}
 .env-type{font-size:11px;color:var(--mut);white-space:nowrap}
@@ -218,4 +219,5 @@ html{-webkit-text-size-adjust:100%;text-size-adjust:100%}
 .sub-sec .sec-body{margin-top:10px}
 .env-row{grid-template-columns:10px minmax(0,1fr) auto auto auto}
 .env-row .env-grp{grid-column:2/-1;font-size:13px;padding:6px 10px}
+@media (max-width:520px){.env-row{grid-template-columns:10px minmax(0,1fr) auto auto;row-gap:6px}.env-row .env-type{grid-column:3/-1;grid-row:2;text-align:center}.env-row .env-grp{grid-column:2;grid-row:2}.env-row .dot{grid-row:1}}
 @media (max-width:520px){.sub-sec{padding:10px 9px}.grp-body{gap:8px}.sub-sec .sec-tot .v{font-size:17px}}
