@@ -13,25 +13,28 @@
    "k": "pea",
    "name": "PEA Bourse Direct",
    "type": "sec",
-   "color": "#60a5fa"
+   "color": "#60a5fa",
+   "group": "Investissement / Bourse"
   },
   {
    "k": "etf",
    "name": "ETF Swissquote",
    "type": "sec",
-   "color": "#a78bfa"
+   "color": "#a78bfa",
+   "group": "Investissement / Bourse"
+  },
+  {
+   "k": "ib",
+   "name": "Actions Interactive Brokers",
+   "type": "sec",
+   "color": "#22d3ee",
+   "group": "Investissement / Bourse"
   },
   {
    "k": "savings",
    "name": "Épargne",
    "type": "sav",
    "color": "#fbbf24"
-  },
-  {
-   "k": "ib",
-   "name": "Actions Interactive Brokers",
-   "type": "sec",
-   "color": "#22d3ee"
   },
   {
    "k": "crypto",
@@ -336,6 +339,6 @@
  },
  "cryptoAt": 0,
  "stocksAt": 1792340688621,
- "updatedAt": 1792340688621,
+ "updatedAt": 1792341308738,
  "savedAt": "2026-10-18T18:24:48+0200"
 }
