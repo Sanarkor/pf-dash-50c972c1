@@ -230,3 +230,4 @@ main{padding-bottom:calc(40px + env(safe-area-inset-bottom))}
 .ro-badge[hidden]{display:none}
 body.view #btnSettings,body.view #btnDemo,body.view #btnDemo2,body.view #btnClearDemo,body.view #empty,body.view .add,body.view .rec-btns,body.view .edit{display:none!important}
 body.view .ln{cursor:default}
+.rec-hist li span:nth-child(3){white-space:normal;overflow-wrap:anywhere}
