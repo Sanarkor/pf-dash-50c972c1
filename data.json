@@ -319,9 +319,10 @@
    "sec": "av",
    "lineId": "94535n06ni",
    "amount": 150,
-   "day": 1,
+   "day": 5,
+   "mode": "buy",
    "active": true,
-   "next": "2026-11-01",
+   "next": "2026-11-05",
    "createdAt": "2026-10-18"
   }
  ],
@@ -339,6 +340,6 @@
  },
  "cryptoAt": 0,
  "stocksAt": 1792340688621,
- "updatedAt": 1792342084718,
- "savedAt": "2026-10-18T16:48:04Z"
+ "updatedAt": 1792391864369,
+ "savedAt": "2026-10-19T06:37:44Z"
 }
