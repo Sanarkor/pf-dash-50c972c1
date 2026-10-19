@@ -50,7 +50,7 @@ function normalize(d){
   if(d.cash&&typeof d.cash==='object')for(const k of b.sections.filter(s=>s.type!=='sav').map(s=>s.k)){const c=d.cash[k];if(c&&typeof c==='object'){const n=typeof c.amount==='number'?c.amount:parseFloat(String(c.amount??'').replace(/\s/g,'').replace(',','.'));
     b.cash[k]={amount:isFinite(n)?n:0,cur:(b.sections.find(s=>s.k===k).type==='sec'&&String(c.cur).toUpperCase()==='USD')?'USD':'EUR'};}}
   if(Array.isArray(d.recurring))b.recurring=d.recurring.filter(r=>r&&typeof r==='object'&&r.id).map(r=>({id:String(r.id),sec:String(r.sec||''),lineId:String(r.lineId||''),
-    amount:+r.amount||0,day:Math.min(31,Math.max(1,parseInt(r.day,10)||1)),active:r.active!==false,next:/^\d{4}-\d{2}-\d{2}$/.test(r.next||'')?r.next:'',createdAt:r.createdAt||''}));
+    mode:r.mode==='cash'?'cash':'buy',amount:+r.amount||0,day:Math.min(31,Math.max(1,parseInt(r.day,10)||1)),active:r.active!==false,next:/^\d{4}-\d{2}-\d{2}$/.test(r.next||'')?r.next:'',createdAt:r.createdAt||''}));
   if(Array.isArray(d.recHistory))b.recHistory=d.recHistory.filter(h=>h&&typeof h==='object'&&h.id);
   b.demo=!!d.demo;
   if(d.settings&&typeof d.settings==='object')Object.assign(b.settings,d.settings);
@@ -611,48 +611,99 @@ function freshNext(r){ // next date strictly after today (and not in a month alr
   const t=ymdLocal();const last=lastRecDate(r);let n=nextOcc(t>REC_START?t:REC_START,r.day);
   if(last&&n.slice(0,7)===last.slice(0,7))n=nextOcc(n,r.day);if(last&&n<=last)n=nextOcc(last,r.day);return n;}
 function round(x,d){const p=10**d;return Math.round(x*p)/p;}
-function applyOne(r,date){
-  const x=findLine(r);if(!x)return 'noline';const l=x.l;
-  let price=num(l.price);if(!(price>0))price=num(l.pru);if(!(price>0))return 'noprice';
-  const rate=x.sec.type==='cry'?1:fx(l.cur);if(!(rate>0))return 'nofx';
+/* price in force at a purchase date: historical close when applied late, live price when due today */
+function ymdUTC(t){const d=new Date(t);return d.getUTCFullYear()+'-'+String(d.getUTCMonth()+1).padStart(2,'0')+'-'+String(d.getUTCDate()).padStart(2,'0');}
+function addDays(ymd,n){const[y,m,d]=ymd.split('-').map(Number);const x=new Date(Date.UTC(y,m-1,d+n));return ymdUTC(x.getTime());}
+async function fxOn(cur,date){cur=(cur||'EUR').toUpperCase();if(cur==='EUR')return {rate:1,hist:true};
+  if(date<ymdLocal()){try{const d=await getJSON('https://api.frankfurter.dev/v1/'+date+'?base=EUR&symbols='+encodeURIComponent(cur));const r=d&&d.rates&&d.rates[cur];if(r>0)return {rate:1/r,hist:true};}catch(e){}}
+  const r=fx(cur);return {rate:r,hist:date>=ymdLocal()};}
+function pickClose(ts,closes,date){let best=null;for(let i=0;i<ts.length;i++){const d=ymdUTC(ts[i]*1000),c=num(closes[i]);if(d<=date&&c>0&&(!best||d>=best.d))best={d,c};}return best;}
+async function histClose(x,date){ // -> {price, pdate} in the line's currency, or null
+  const l=x.l;
+  if(x.sec.type==='cry'){if(!l.cgId)return null;const[y,m,d]=date.split('-');
+    try{const r=await getJSON('https://api.coingecko.com/api/v3/coins/'+encodeURIComponent(l.cgId)+'/history?localization=false&date='+d+'-'+m+'-'+y);
+      const p=r&&r.market_data&&r.market_data.current_price&&r.market_data.current_price.eur;return p>0?{price:p,pdate:date}:null;}catch(e){return null;}}
+  if(l.isin){let c=ovCache()[ovKey(l)];if(!c){try{await onvista(l);}catch(e){}c=ovCache()[ovKey(l)];}
+    if(c&&c.id&&c.not){try{const h=await getJSON(OV+c.t+'/'+encodeURIComponent(c.id)+'/eod_history?idNotation='+encodeURIComponent(c.not)+'&range=M1&startDate='+addDays(date,-12));
+      const b=h&&Array.isArray(h.datetimeLast)?pickClose(h.datetimeLast,h.last||[],date):null;if(b)return {price:b.c,pdate:b.d};}catch(e){}}}
+  const key=(S.settings.apiKey||'').trim();
+  if(l.apiSym&&S.settings.provider==='twelvedata'&&key&&tdGuard()&&tdBudget(1)){
+    try{const r=await getJSON('https://api.twelvedata.com/time_series?interval=1day&outputsize=10&end_date='+addDays(date,1)+'&symbol='+encodeURIComponent(l.apiSym.trim())+'&apikey='+encodeURIComponent(key));
+      const v=(r&&Array.isArray(r.values)?r.values:[]).filter(z=>z.datetime.slice(0,10)<=date&&num(z.close)>0).sort((p,q)=>p.datetime<q.datetime?1:-1)[0];if(v)return {price:num(v.close),pdate:v.datetime.slice(0,10)};}catch(e){}}
+  return null;}
+async function priceOn(x,date){ // {price, rate, src:'jour'|'cloture'|'approx', pdate}
+  const l=x.l;const today=ymdLocal();
+  if(date<today){const h=await histClose(x,date);
+    if(h){const f=x.sec.type==='cry'?{rate:1}:await fxOn(l.cur,h.pdate);if(f.rate>0)return {price:h.price,rate:f.rate,src:'cloture',pdate:h.pdate};}}
+  let price=num(l.price);if(!(price>0))price=num(l.pru);if(!(price>0))return null;
+  const rate=x.sec.type==='cry'?1:fx(l.cur);if(!(rate>0))return null;
+  return {price,rate,src:date<today?'approx':'jour',pdate:today};}
+function served(r,month,hist){return (hist||S.recHistory).some(h=>h&&h.ruleId===r.id&&String(h.month||h.date||'').slice(0,7)===month);}
+async function applyOne(r,date){
   const amt=+r.amount;if(!(amt>0))return 'noamount';
-  const q=num(l.qty)||0,pru=num(l.pru);
+  if(r.mode==='cash'){const sec=SECTIONS.find(s=>s.k===r.sec&&s.type!=='sav');if(!sec)return 'noline';
+    const c=S.cash[sec.k]||(S.cash[sec.k]={amount:0,cur:'EUR'});const cur=c.cur||'EUR';const f=await fxOn(cur,date);if(!(f.rate>0))return 'nofx';
+    const add=round(amt/f.rate,2);const prev=num(c.amount)||0;c.amount=round(prev+add,2);
+    S.recHistory.push({id:uid(),ruleId:r.id,mode:'cash',date,month:date.slice(0,7),at:Date.now(),amount:amt,added:add,cur,rate:f.rate,sec:sec.k,prevCash:prev,newCash:c.amount});return 'ok';}
+  const x=findLine(r);if(!x)return 'noline';const l=x.l;
+  const pr=await priceOn(x,date);if(!pr)return 'noprice';
+  const q=num(l.qty)||0,pru=num(l.pru),price=pr.price,rate=pr.rate;
   const units=round(amt/(price*rate),6);if(!(units>0))return 'nounits';
-  const nq=round(q+units,6);const npru=isFinite(pru)&&q>0?round((q*pru+units*price)/nq,6):round(price,6);
-  S.recHistory.push({id:uid(),ruleId:r.id,date,at:Date.now(),amount:amt,units,price,cur:x.sec.type==='cry'?'EUR':(l.cur||'EUR'),rate,sec:x.sec.k,lineId:l.id,prevQty:q,prevPru:isFinite(pru)?pru:null,newQty:nq,newPru:npru});
+  const nq=round(q+units,6);const npru=isFinite(pru)&&q>0?round((q*pru+units*price)/nq,6):round(price,6); // = (qty*PRU + amount)/newQty in the line's currency
+  S.recHistory.push({id:uid(),ruleId:r.id,mode:'buy',date,month:date.slice(0,7),at:Date.now(),amount:amt,units,price,cur:x.sec.type==='cry'?'EUR':(l.cur||'EUR'),rate,src:pr.src,pdate:pr.pdate,sec:x.sec.k,lineId:l.id,prevQty:q,prevPru:isFinite(pru)?pru:null,newQty:nq,newPru:npru});
   l.qty=nq;l.pru=npru;return 'ok';
 }
-function applyRecurring(){
-  const t=ymdLocal();let n=0,sum=0;const why=new Set();
-  for(const r of S.recurring){if(!r.active)continue;if(!r.next)r.next=freshNext(r);let guard=0;
-    while(r.next<=t&&guard++<240){const res=applyOne(r,r.next);if(res!=='ok'){why.add(res);break;}n++;sum+=+r.amount;r.next=nextOcc(r.next,r.day);}}
-  if(n){touch();save();render();toast('🔁 '+n+' versement(s) automatique(s) appliqué(s) ('+eur(sum)+'). Pense à « Sauvegarder en ligne ».',7000);}
-  else if(why.has('noprice'))toast('Versement automatique en attente : cours indisponible',4000);
-  return n;
+let recBusy=false;
+async function applyRecurring(){
+  if(VIEW||recBusy)return 0;recBusy=true;
+  try{const t=ymdLocal();let n=0,sum=0,skipped=0;const why=new Set();
+    if(!S.recurring.some(r=>r.active&&(!r.next||r.next<=t)))return 0;
+    let remote=null;try{const d=await fetchRemote(false);remote=d&&Array.isArray(d.recHistory)?d.recHistory:null;}catch(e){} // other device already saved this month?
+    for(const r of S.recurring){if(!r.active)continue;if(!r.next)r.next=freshNext(r);let guard=0;
+      while(r.next<=t&&guard++<240){const m=r.next.slice(0,7);
+        if(served(r,m)||(remote&&served(r,m,remote))){if(!served(r,m))skipped++;r.next=nextOcc(r.next,r.day);continue;}
+        const res=await applyOne(r,r.next);if(res!=='ok'){why.add(res);break;}n++;sum+=+r.amount;r.next=nextOcc(r.next,r.day);}}
+    if(n||skipped){touch();save();render();}
+    if(n)toast('🔁 '+n+' versement(s) automatique(s) appliqué(s) ('+eur(sum)+'). Pense à « Sauvegarder en ligne ».',7000);
+    else if(skipped)toast('Versement déjà appliqué sur un autre appareil : charge les données en ligne (⚙).',7000);
+    else if(why.has('noprice'))toast('Versement automatique en attente : cours indisponible',4000);
+    return n;}finally{recBusy=false;}
 }
 function undoLast(r){
   const hs=S.recHistory.filter(h=>h.ruleId===r.id&&!h.undone);if(!hs.length)return false;
   const h=hs.reduce((a,b)=>(b.date>a.date||(b.date===a.date&&b.at>a.at))?b:a);
-  const x=findLine({sec:h.sec,lineId:h.lineId});
-  if(x){const l=x.l;const q=num(l.qty)||0,pru=num(l.pru);
-    if(Math.abs(q-h.newQty)<1e-9&&isFinite(pru)&&Math.abs(pru-h.newPru)<1e-9){l.qty=h.prevQty;l.pru=h.prevPru;}
-    else{const nq=round(q-h.units,6);if(nq<=1e-9){l.qty=h.prevQty;l.pru=h.prevPru;}
-      else{l.qty=nq;if(isFinite(pru))l.pru=round((q*pru-h.units*h.price)/nq,6);}}}
-  h.undone=true;h.undoneAt=Date.now();touch();save();render();return true;
+  // manual edits always win: values are restored only if the line/cash still holds exactly what this purchase produced
+  let restored=false;
+  if(h.mode==='cash'){const c=S.cash[h.sec];if(c&&Math.abs((num(c.amount)||0)-h.newCash)<1e-9){c.amount=h.prevCash;restored=true;}}
+  else{const x=findLine({sec:h.sec,lineId:h.lineId});
+    if(x){const l=x.l;const q=num(l.qty)||0,pru=num(l.pru);
+      if(Math.abs(q-h.newQty)<1e-9&&isFinite(pru)&&Math.abs(pru-h.newPru)<1e-9){l.qty=h.prevQty;l.pru=h.prevPru;restored=true;}}}
+  h.undone=true;h.undoneAt=Date.now();touch();save();render();return restored; // month stays served: never re-applied
 }
+function recTarget(r){if(r.mode==='cash'){const s=SECTIONS.find(x=>x.k===r.sec);return 'cash · '+(s?s.name:'(enveloppe supprimée)');}return 'achat · '+lineLabel(findLine(r));}
+function srcLabel(h){if(h.mode==='cash')return '→ cash'+(h.cur&&h.cur!=='EUR'?' ('+money(h.added,h.cur)+')':'');
+  return h.src==='cloture'?'clôture '+frDate(h.pdate).slice(0,5):h.src==='approx'?'≈ cours du jour':h.src==='jour'?'cours du jour':'';}
 const recEdit={id:null};
 function recForm(r){
-  const isNew=!r;r=r||{amount:150,day:1};
-  const opts=recLines();
+  const isNew=!r;r=r||{amount:150,day:1,mode:'buy'};
+  const opts=recLines();const envs=SECTIONS.filter(s=>s.type!=='sav');
   let defId=r.lineId;if(!defId){const sw=opts.find(x=>x.l.isin==='FR0010429068')||opts.find(x=>/swiss/i.test(x.sec.name))||opts[0];defId=sw&&sw.l.id;}
+  const mode=el('select',{name:'mode'},...[['buy','Acheter une ligne existante'],['cash','Ajouter au cash de l\'enveloppe']].map(([v,t])=>{const o=el('option',{value:v,text:t});if((r.mode||'buy')===v)o.selected=true;return o;}));
   const sel=el('select',{name:'target'},...opts.map(x=>{const o=el('option',{value:x.sec.k+'|'+x.l.id,text:lineLabel(x)});if(x.l.id===defId)o.selected=true;return o;}));
+  const esel=el('select',{name:'env'},...envs.map(s=>{const o=el('option',{value:s.k,text:s.name});if(r.mode==='cash'&&r.sec===s.k)o.selected=true;return o;}));
+  const lLine=el('label',{class:'full'},'Ligne cible',sel),lEnv=el('label',{class:'full'},'Enveloppe (fonds non investis)',esel);
+  const hint=el('p',{class:'hint full'});
+  const sync=()=>{const c=mode.value==='cash';lLine.classList.toggle('hidden',c);lEnv.classList.toggle('hidden',!c);
+    hint.textContent=c?'Le montant s\'ajoute aux fonds disponibles non investis (hors plus/moins-value).':'Achète montant ÷ cours de la date (clôture si appliqué en retard, sinon cours du jour) ; quantité et PRU sont recalculés.';};
+  mode.addEventListener('change',sync);sync();
   const f=el('form',{class:'edit rec-edit',onsubmit:e=>{e.preventDefault();const fd=new FormData(f);
-    const amt=num((fd.get('amount')||'').toString());const day=parseInt(fd.get('day'),10);const tg=String(fd.get('target')||'').split('|');
-    if(!(amt>0)){toast('Montant invalide');return;}if(!(day>=1&&day<=31)){toast('Jour entre 1 et 31');return;}if(!tg[1]){toast('Choisis une ligne cible');return;}
-    if(isNew){const nr={id:uid(),sec:tg[0],lineId:tg[1],amount:amt,day,active:true,createdAt:ymdLocal()};nr.next=freshNext(nr);S.recurring.push(nr);}
-    else{const dayCh=r.day!==day;Object.assign(r,{sec:tg[0],lineId:tg[1],amount:amt,day});if(dayCh)r.next=freshNext(r);}
+    const amt=num((fd.get('amount')||'').toString());const day=parseInt(fd.get('day'),10);const md=fd.get('mode')==='cash'?'cash':'buy';
+    let sec,lineId='';if(md==='cash'){sec=String(fd.get('env')||'');if(!sec){toast('Choisis une enveloppe');return;}}else{const tg=String(fd.get('target')||'').split('|');if(!tg[1]){toast('Choisis une ligne cible');return;}sec=tg[0];lineId=tg[1];}
+    if(!(amt>0)){toast('Montant invalide');return;}if(!(day>=1&&day<=31)){toast('Jour entre 1 et 31');return;}
+    if(isNew){const nr={id:uid(),mode:md,sec,lineId,amount:amt,day,active:true,createdAt:ymdLocal()};nr.next=freshNext(nr);S.recurring.push(nr);}
+    else{const dayCh=r.day!==day;Object.assign(r,{mode:md,sec,lineId,amount:amt,day});if(dayCh)r.next=freshNext(r);}
     recEdit.id=null;touch();save();render();}});
-  f.append(inp('amount','Montant (€)',r.amount,{num:1}),inp('day','Jour du mois',r.day,{num:1,ph:'1'}),el('label',{class:'full'},'Ligne cible',sel));
+  f.append(inp('amount','Montant (€)',r.amount,{num:1}),inp('day','Jour du mois',r.day,{num:1,ph:'1'}),el('label',{class:'full'},'Mode',mode),lLine,lEnv,hint);
   if(!opts.length)f.append(el('p',{class:'hint full',text:'Ajoute d\'abord une ligne (titre ou crypto) à une enveloppe.'}));
   f.append(el('div',{class:'btns'},el('button',{type:'button',onclick:()=>{recEdit.id=null;render();}},'Annuler'),el('button',{type:'submit',class:'primary'},isNew?'Créer':'Enregistrer')));
   return f;
@@ -665,17 +716,17 @@ function renderRecurring(){
     const x=findLine(r);const hs=S.recHistory.filter(h=>h.ruleId===r.id).sort((a,b)=>a.date<b.date?1:a.date>b.date?-1:b.at-a.at);
     const live=hs.filter(h=>!h.undone);
     const head=el('div',{class:'rec-top'},
-      el('div',{class:'rec-main'},el('div',{class:'rec-amt amt',text:'+'+eur(r.amount)+' / mois'}),el('div',{class:'rec-sub',text:'le '+r.day+' · '+lineLabel(x)})),
+      el('div',{class:'rec-main'},el('div',{class:'rec-amt amt',text:'+'+eur(r.amount)+' / mois'}),el('div',{class:'rec-sub',text:'le '+r.day+' · '+recTarget(r)})),
       el('span',{class:'tag '+(r.active?'ok':'off'),text:r.active?'actif':'en pause'}));
     const nxt=el('div',{class:'rec-next',text:r.active?('Prochain versement : '+frDate(r.next||freshNext(r))):'Versements suspendus'});
     const btns=el('div',{class:'rec-btns'},
       el('button',{type:'button',class:'b',onclick:()=>{recEdit.id=r.id;render();}},'Modifier'),
       el('button',{type:'button',class:'b',onclick:()=>{r.active=!r.active;if(r.active)r.next=freshNext(r);touch();save();render();toast(r.active?'Versement repris (prochain : '+frDate(r.next)+')':'Versement mis en pause');}},r.active?'⏸ Pause':'▶ Reprendre'),
-      live.length?el('button',{type:'button',class:'b',onclick:async()=>{const h=live[0];if(!await ask('Annuler le dernier versement ?',{ok:'Annuler le versement',sub:frDate(h.date)+' : '+eur(h.amount)+' → '+qtyf(h.units)+' part(s). Il ne sera pas réappliqué.'}))return;undoLast(r);toast('Dernier versement annulé');}},'↶ Annuler le dernier'):null,
+      live.length?el('button',{type:'button',class:'b',onclick:async()=>{const h=live[0];if(!await ask('Annuler le dernier versement ?',{ok:'Annuler le versement',sub:frDate(h.date)+' : '+eur(h.amount)+' → '+qtyf(h.units)+' part(s). Il ne sera pas réappliqué.'}))return;toast(undoLast(r)?'Dernier versement annulé':'Versement marqué annulé — la ligne a été modifiée à la main, quantité/PRU laissés tels quels',5000);}},'↶ Annuler le dernier'):null,
       el('button',{type:'button',class:'b danger',onclick:async()=>{if(!await ask('Supprimer ce versement programmé ?',{ok:'Supprimer',danger:1,sub:'Les parts déjà achetées restent en place.'}))return;S.recurring=S.recurring.filter(z=>z!==r);touch();save();render();}},'Supprimer'));
-    const hist=el('details',{class:'rec-hist'},el('summary',null,'Historique ('+live.length+')'),
+    const hist=el('details',{class:'rec-hist',open:live.length>0},el('summary',null,'Historique ('+live.length+')'),
       hs.length?el('ul',null,...hs.slice(0,24).map(h=>el('li',{class:h.undone?'undone':''},el('span',{text:frDate(h.date)}),el('span',{class:'amt',text:eur(h.amount)}),
-        el('span',{class:'amt',text:qtyf(h.units)+' × '+money(h.price,h.cur)}),h.undone?el('span',{class:'tag off',text:'annulé'}):null))):el('p',{class:'hint',text:'Aucun versement appliqué pour l\'instant.'}));
+        el('span',{class:'amt',text:h.mode==='cash'?srcLabel(h):qtyf(h.units)+' part(s) × '+money(h.price,h.cur)+(srcLabel(h)?' · '+srcLabel(h):'')}),h.undone?el('span',{class:'tag off',text:'annulé'}):null))):el('p',{class:'hint',text:'Aucun versement appliqué pour l\'instant.'}));
     box.appendChild(el('div',{class:'rec-item'+(r.active?'':' paused')},head,nxt,VIEW?null:btns,hist));
   }
   if(VIEW)return;
